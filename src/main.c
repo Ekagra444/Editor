@@ -1,34 +1,50 @@
 #include <SDL.h>
-#include<SDL_ttf.h>
+#include <SDL_ttf.h>
 #include <stdio.h>
-void render_text(SDL_Renderer *renderer, TTF_Font *font, const char *text, int x, int y){
-	SDL_Color color= {255,255,255,255};
-	if(!(*text))return;
-	SDL_Surface *surface= TTF_RenderText_Blended(font,text,color);
-	if (!surface) {
-	    printf("Surface Error: %s\n", TTF_GetError());
-	    return;
-	}
-	SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer,surface);
-	if (surface && !texture) {
-	    SDL_FreeSurface(surface);
-	    printf("Texture Error: %s\n", SDL_GetError());
-	    return;
-	}
-	SDL_Rect dst = {x,y,surface->w,surface->h};
-	SDL_FreeSurface(surface);//surface no longer needed
-	SDL_RenderCopy(renderer,texture,NULL,&dst);
-	SDL_DestroyTexture(texture);
+#include <string.h>
+
+#define MAX_LINES 100
+#define MAX_COLS  256
+#define CURSOR_BLINK_INTERVAL 700
+char lines[MAX_LINES][MAX_COLS];
+int line_count = 1;
+
+int cursor_row = 0;
+int cursor_col = 0;
+
+// ---------- TEXT RENDER ----------
+void render_text(SDL_Renderer *renderer, TTF_Font *font, const char *text, int x, int y) {
+
+    if (!font || !text) return;  // guard
+
+    SDL_Color color = {255, 255, 255, 255};
+
+    SDL_Surface *surface = TTF_RenderText_Blended(font, text, color);
+
+    if (!surface) {
+//        printf("TTF Render Error: %s\n", TTF_GetError());
+        return;
+    }
+
+    SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer, surface);
+
+    if (!texture) {
+        printf("Texture Error: %s\n", SDL_GetError());
+        SDL_FreeSurface(surface);
+        return;
+    }
+
+    SDL_Rect dst = {x, y, surface->w, surface->h};
+
+    SDL_FreeSurface(surface);
+
+    SDL_RenderCopy(renderer, texture, NULL, &dst);
+    SDL_DestroyTexture(texture);
 }
+// ---- MAIN ------
 int main() {
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        printf("SDL Init Error: %s\n", SDL_GetError());
-        return 1;
-    }
-    if(TTF_Init()==-1){
-	    printf("TTF Init Error: %s\n",TTF_GetError());
-	    return 1;
-    }
+    SDL_Init(SDL_INIT_VIDEO);
+    TTF_Init();
 
     SDL_Window *window = SDL_CreateWindow(
         "Ekagra Editor",
@@ -37,57 +53,154 @@ int main() {
         800, 600,
         SDL_WINDOW_SHOWN
     );
+
+    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     TTF_Font *font = TTF_OpenFont("/Users/ekagraagrawal/Library/Fonts/FiraCode-Regular.ttf", 24);
-
-    if (!font) {
-	printf("Font Error: %s\n", TTF_GetError());
-	return 1;
+   if(!font){
+  	printf("Font Error: %s\n",TTF_GetError());
+     return 1;	
     }
+    strcpy(lines[0], "");
 
-    if (!window) {
-        printf("Window Error: %s\n", SDL_GetError());
-        SDL_Quit();
-        return 1;
-    }
-    SDL_Renderer* renderer = SDL_CreateRenderer(
-	    window,
-	    -1,
-	    SDL_RENDERER_ACCELERATED
-     );
-
-    int running =1;
-    SDL_Event event;
     SDL_StartTextInput();
-    char buffer[1024] = ""; // editor state 
-    while(running){
-    	while(SDL_PollEvent(&event)){
-		if(event.type==SDL_QUIT){running =0;}
-		if(event.type==SDL_TEXTINPUT){
-			strcat(buffer,event.text.text);
-		}
-		if(event.type==SDL_KEYDOWN){
-			if(event.key.keysym.sym==SDLK_BACKSPACE && strlen(buffer)>0){
-			buffer[strlen(buffer)-1]='\0';
-			}
-		}
-		
+
+    int running = 1;
+    SDL_Event event;
+
+    // ---- MAIN LOOP----
+    while (running) {
+
+        while (SDL_PollEvent(&event)) {
+
+            if (event.type == SDL_QUIT) running = 0;
+
+            // ---------- TEXT INPUT ----------
+            if (event.type == SDL_TEXTINPUT) {
+                char *line = lines[cursor_row];
+                int len = strlen(line);
+
+                if (len < MAX_COLS - 1) {
+                    memmove(&line[cursor_col + 1],
+                            &line[cursor_col],
+                            len - cursor_col + 1);
+
+                    line[cursor_col] = event.text.text[0];
+                    cursor_col++;
+                }
+            }
+
+            // ---- KEY EVENTS -----
+            if (event.type == SDL_KEYDOWN) {
+
+                // BACKSPACE
+                if (event.key.keysym.sym == SDLK_BACKSPACE) {
+
+                    if (cursor_col > 0) {
+                        char *line = lines[cursor_row];
+
+                        memmove(&line[cursor_col - 1],
+                                &line[cursor_col],
+                                strlen(line) - cursor_col + 1);
+
+                        cursor_col--;
+
+                    } else if (cursor_row > 0) {
+
+                        int prev_len = strlen(lines[cursor_row - 1]);
+
+                        strcat(lines[cursor_row - 1], lines[cursor_row]);
+
+                        for (int i = cursor_row; i < line_count - 1; i++) {
+                            strcpy(lines[i], lines[i + 1]);
+                        }
+
+                        line_count--;
+                        cursor_row--;
+                        cursor_col = prev_len;
+                    }
+                }
+
+                // ENTER
+                if (event.key.keysym.sym == SDLK_RETURN) {
+
+                    char *line = lines[cursor_row];
+
+                    for (int i = line_count; i > cursor_row + 1; i--) {
+                        strcpy(lines[i], lines[i - 1]);
+                    }
+
+                    strcpy(lines[cursor_row + 1], &line[cursor_col]);
+                    line[cursor_col] = '\0';
+
+                    line_count++;
+                    cursor_row++;
+                    cursor_col = 0;
+                }
+
+                // ARROWS
+                if (event.key.keysym.sym == SDLK_LEFT) {
+                    if (cursor_col > 0) cursor_col--;
+                }
+
+                if (event.key.keysym.sym == SDLK_RIGHT) {
+                    if (cursor_col < strlen(lines[cursor_row])) cursor_col++;
+                }
+
+                if (event.key.keysym.sym == SDLK_UP) {
+                    if (cursor_row > 0) {
+                        cursor_row--;
+                        cursor_col = SDL_min(cursor_col, strlen(lines[cursor_row]));
+                    }
+                }
+
+                if (event.key.keysym.sym == SDLK_DOWN) {
+                    if (cursor_row < line_count - 1) {
+                        cursor_row++;
+                        cursor_col = SDL_min(cursor_col, strlen(lines[cursor_row]));
+                    }
+                }
+            }
+        }
+
+        //------ RENDER------
+        SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
+        SDL_RenderClear(renderer);
+	
+	int line_height = TTF_FontHeight(font);
+        
+	for (int i = 0; i < line_count; i++) {
+            render_text(renderer, font, lines[i], 50, 50 + i *(line_height));
+        }
+
+        // ---- CURSOR ------
+	
+	char temp[MAX_COLS];
+	strncpy(temp,lines[cursor_row],cursor_col);
+	temp[cursor_col]='\0';
+	int cursor_offset=0;
+	TTF_SizeText(font,temp,&cursor_offset,NULL);
+
+        int cursor_x = 50 + cursor_offset;
+        int cursor_y = 50 + cursor_row * line_height;
+	Uint32 current_time = SDL_GetTicks();
+	int show_cursor = (current_time/CURSOR_BLINK_INTERVAL)%2==0;
+        if(show_cursor){
+		SDL_Rect cursor_rect = {cursor_x, cursor_y, 2, 24};
+		SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+		SDL_RenderFillRect(renderer, &cursor_rect);
 	}
-    	SDL_SetRenderDrawColor(renderer,30,30,30,255);
-	SDL_RenderClear(renderer);
-//rendering text	
-	render_text(renderer,font,buffer,50,50);
-    	
-	SDL_RenderPresent(renderer);
+        SDL_RenderPresent(renderer);
+	SDL_Delay(16);
     }
+
+    // ------ CLEANUP ------
+    SDL_StopTextInput();
     TTF_CloseFont(font);
     TTF_Quit();
+
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
+
     return 0;
-
 }
-
-
-
-
