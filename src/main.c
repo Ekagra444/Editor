@@ -6,12 +6,30 @@
 #define MAX_LINES 100
 #define MAX_COLS  256
 #define CURSOR_BLINK_INTERVAL 700
+SDL_Texture* line_textures[MAX_LINES];
+int dirty[MAX_LINES];
+
 char lines[MAX_LINES][MAX_COLS];
 int line_count = 1;
 //current file name
 char current_file[256]="";
 int cursor_row = 0;
 int cursor_col = 0;
+
+// -----Texture creation per line------
+void update_line_texture(SDL_Renderer *renderer, TTF_Font *font, int i)
+{
+	if(line_textures[i]){
+		SDL_DestroyTexture(line_textures[i]);
+		line_textures[i]=NULL;
+	}
+	SDL_Color color= {255,255,255,255};
+	SDL_Surface *surface = TTF_RenderText_Blended(font,lines[i],color);
+	if(!surface){return;}
+	line_textures[i]=SDL_CreateTextureFromSurface(renderer,surface);
+	SDL_FreeSurface(surface);
+}
+
 ////------FILE LOADING AND SAVING--------
 void load_file(const char* filename)
 {
@@ -35,6 +53,9 @@ void load_file(const char* filename)
 	{
 		strcpy(lines[0],"");
 		line_count=1;
+	}
+	for(int i=0;i<line_count;i++){
+		dirty[i]=1;
 	}
 	cursor_row=0;
 	cursor_col=0;
@@ -113,6 +134,11 @@ int main(int argc,char *argv[]) {
     int running = 1;
     SDL_Event event;
 
+    //state initialization
+    for(int i=0;i<MAX_LINES;i++){
+    	line_textures[i]=NULL;
+	dirty[i]=1;
+    }
     // ---- MAIN LOOP----
     while (running) {
 
@@ -122,6 +148,7 @@ int main(int argc,char *argv[]) {
 
             // ---------- TEXT INPUT ----------
             if (event.type == SDL_TEXTINPUT) {
+		dirty[cursor_row]=1; // create texture again
                 char *line = lines[cursor_row];
                 int len = strlen(line);
 
@@ -149,7 +176,7 @@ int main(int argc,char *argv[]) {
 		}
                 // BACKSPACE
                 if (event.key.keysym.sym == SDLK_BACKSPACE) {
-
+	   	    dirty[cursor_row]=1;
                     if (cursor_col > 0) {
                         char *line = lines[cursor_row];
 
@@ -162,12 +189,15 @@ int main(int argc,char *argv[]) {
                     } else if (cursor_row > 0) {
 
                         int prev_len = strlen(lines[cursor_row - 1]);
-
+			dirty[cursor_row-1]=1;
                         strcat(lines[cursor_row - 1], lines[cursor_row]);
 
                         for (int i = cursor_row; i < line_count - 1; i++) {
+			    line_textures[i]=line_textures[i+1];
+			    dirty[i]=1;
                             strcpy(lines[i], lines[i + 1]);
                         }
+			line_textures[line_count-1]=NULL;
 
                         line_count--;
                         cursor_row--;
@@ -177,13 +207,14 @@ int main(int argc,char *argv[]) {
 
                 // ENTER
                 if (event.key.keysym.sym == SDLK_RETURN) {
-
+	   	    dirty[cursor_row]=1;
+	   	    dirty[cursor_row+1]=1;
                     char *line = lines[cursor_row];
-
                     for (int i = line_count; i > cursor_row + 1; i--) {
-                        strcpy(lines[i], lines[i - 1]);
+                       	 line_textures[i]=line_textures[i-1];
+		 	 strcpy(lines[i], lines[i - 1]);
                     }
-
+		    line_textures[cursor_row+1]=NULL;
                     strcpy(lines[cursor_row + 1], &line[cursor_col]);
                     line[cursor_col] = '\0';
 
@@ -222,10 +253,20 @@ int main(int argc,char *argv[]) {
         SDL_RenderClear(renderer);
 	
 	int line_height = TTF_FontHeight(font);
-        
+         
 	for (int i = 0; i < line_count; i++) {
-            render_text(renderer, font, lines[i], 50, 50 + i *(line_height));
-        }
+        	if(dirty[i]){
+			update_line_texture(renderer,font,i);
+			dirty[i]=0;
+		}
+		if(line_textures[i]){
+			int w,h;
+			SDL_QueryTexture(line_textures[i],NULL,NULL,&w,&h);
+			SDL_Rect dst={50,50+i*line_height,w,h};
+			SDL_RenderCopy(renderer,line_textures[i],NULL,&dst);
+
+		}
+	}
 
         // ---- CURSOR ------
 	
@@ -248,7 +289,12 @@ int main(int argc,char *argv[]) {
 	SDL_Delay(16);
     }
 
-    // ------ CLEANUP ------
+    // ------ CLEANUP -----
+    for(int i=0;i<MAX_LINES;i++){
+    	if(line_textures[i]){
+		SDL_DestroyTexture(line_textures[i]);
+	}
+    }
     SDL_StopTextInput();
     TTF_CloseFont(font);
     TTF_Quit();
