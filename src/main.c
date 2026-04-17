@@ -8,10 +8,53 @@
 #define CURSOR_BLINK_INTERVAL 700
 char lines[MAX_LINES][MAX_COLS];
 int line_count = 1;
-
+//current file name
+char current_file[256]="";
 int cursor_row = 0;
 int cursor_col = 0;
+////------FILE LOADING AND SAVING--------
+void load_file(const char* filename)
+{
+	FILE *fp=fopen(filename,"r");
+	if(!fp)
+	{
+		printf("Could not open file \n");
+		return;
+	}
+	strcpy(current_file,filename);
+	line_count=0;
+	char buffer[MAX_COLS];
+	while(fgets(buffer,MAX_COLS,fp) && line_count<MAX_LINES)
+	{
+		buffer[strcspn(buffer,"\n")]='\0';
+		strcpy(lines[line_count],buffer);
+		line_count++;
+	}
+	fclose(fp);
+	if(line_count==0)
+	{
+		strcpy(lines[0],"");
+		line_count=1;
+	}
+	cursor_row=0;
+	cursor_col=0;
+}
 
+void save_file(const char *filename)
+{
+	FILE *fp=fopen(filename,"w");
+	if(!fp)
+	{
+		printf("Could not save file\n");
+		return;
+	}
+	for(int i=0;i<line_count;i++){
+		fprintf(fp,"%s\n",lines[i]);
+	}
+	fclose(fp);
+	printf("Saved: %s\n",filename);
+}
+//
 // ---------- TEXT RENDER ----------
 void render_text(SDL_Renderer *renderer, TTF_Font *font, const char *text, int x, int y) {
 
@@ -42,7 +85,11 @@ void render_text(SDL_Renderer *renderer, TTF_Font *font, const char *text, int x
     SDL_DestroyTexture(texture);
 }
 // ---- MAIN ------
-int main() {
+int main(int argc,char *argv[]) {
+    strcpy(lines[0], "");
+    if(argc>1){
+    	load_file(argv[1]);
+    }	
     SDL_Init(SDL_INIT_VIDEO);
     TTF_Init();
 
@@ -60,7 +107,6 @@ int main() {
   	printf("Font Error: %s\n",TTF_GetError());
      return 1;	
     }
-    strcpy(lines[0], "");
 
     SDL_StartTextInput();
 
@@ -91,7 +137,16 @@ int main() {
 
             // ---- KEY EVENTS -----
             if (event.type == SDL_KEYDOWN) {
-
+		//CTRL + S 
+		if((event.key.keysym.sym==SDLK_s)&&(event.key.keysym.mod & KMOD_CTRL)){
+			if(strlen(current_file)>0){
+				save_file(current_file);
+			}
+			else{
+				save_file("output.txt");
+			}
+		
+		}
                 // BACKSPACE
                 if (event.key.keysym.sym == SDLK_BACKSPACE) {
 
