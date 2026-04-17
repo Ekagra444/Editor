@@ -8,7 +8,7 @@
 #define CURSOR_BLINK_INTERVAL 700
 SDL_Texture* line_textures[MAX_LINES];
 int dirty[MAX_LINES];
-
+int scroll_offset =0;
 char lines[MAX_LINES][MAX_COLS];
 int line_count = 1;
 //current file name
@@ -144,6 +144,7 @@ int main(int argc,char *argv[]) {
 
         while (SDL_PollEvent(&event)) {
 
+
             if (event.type == SDL_QUIT) running = 0;
 
             // ---------- TEXT INPUT ----------
@@ -161,6 +162,14 @@ int main(int argc,char *argv[]) {
                     cursor_col++;
                 }
             }
+
+	    //----MOUSE EVENT-----
+	    if(event.type == SDL_MOUSEWHEEL){
+	    	if(event.wheel.y>0 && scroll_offset>0){
+			scroll_offset--;
+		}
+		if(event.wheel.y<0 &&scroll_offset<line_count-1)scroll_offset++;
+	    }
 
             // ---- KEY EVENTS -----
             if (event.type == SDL_KEYDOWN) {
@@ -253,17 +262,30 @@ int main(int argc,char *argv[]) {
         SDL_RenderClear(renderer);
 	
 	int line_height = TTF_FontHeight(font);
-         
-	for (int i = 0; i < line_count; i++) {
-        	if(dirty[i]){
-			update_line_texture(renderer,font,i);
-			dirty[i]=0;
+        int window_height,window_width;
+	SDL_GetWindowSize(window, &window_width,&window_height);
+	int visible_lines=(window_height-50)/line_height ;
+	
+	if(cursor_row<scroll_offset){
+		scroll_offset=cursor_row;
+	}
+	if(cursor_row>=scroll_offset+visible_lines){
+		scroll_offset=cursor_row-visible_lines+1;
+	}
+
+	for (int i = 0; i < visible_lines; i++) {
+        	int line_index=scroll_offset+i;
+		if(line_index>=line_count)break;
+
+		if(dirty[line_index]){
+			update_line_texture(renderer,font,line_index);
+			dirty[line_index]=0;
 		}
-		if(line_textures[i]){
+		if(line_textures[line_index]){
 			int w,h;
-			SDL_QueryTexture(line_textures[i],NULL,NULL,&w,&h);
+			SDL_QueryTexture(line_textures[line_index],NULL,NULL,&w,&h);
 			SDL_Rect dst={50,50+i*line_height,w,h};
-			SDL_RenderCopy(renderer,line_textures[i],NULL,&dst);
+			SDL_RenderCopy(renderer,line_textures[line_index],NULL,&dst);
 
 		}
 	}
@@ -277,7 +299,7 @@ int main(int argc,char *argv[]) {
 	TTF_SizeText(font,temp,&cursor_offset,NULL);
 
         int cursor_x = 50 + cursor_offset;
-        int cursor_y = 50 + cursor_row * line_height;
+        int cursor_y = 50 +(cursor_row-scroll_offset) * line_height;
 	Uint32 current_time = SDL_GetTicks();
 	int show_cursor = (current_time/CURSOR_BLINK_INTERVAL)%2==0;
         if(show_cursor){
