@@ -15,21 +15,143 @@ int line_count = 1;
 char current_file[256]="";
 int cursor_row = 0;
 int cursor_col = 0;
-
+const char *keywords[] = {
+    "int", "return", "if", "else", "while", "for", "void", "char", "float", "double"
+};
+int keyword_count = sizeof(keywords) / sizeof(keywords[0]);
+int is_keyword(const char *word){
+	for(int i=0;i<keyword_count;i++){
+		if(strcmp(word,keywords[i])==0)return 1;
+	}
+	return 0;
+}
 // -----Texture creation per line------
+//void update_line_texture(SDL_Renderer *renderer, TTF_Font *font, int i)
+//{
+//	if(line_textures[i]){
+//		SDL_DestroyTexture(line_textures[i]);
+//		line_textures[i]=NULL;
+//	}
+//	const char *line = lines[i];
+//
+//	SDL_Color color= {255,255,255,255};
+//	SDL_Surface *surface = TTF_RenderText_Blended(font,lines[i],color);
+//	if(!surface){return;}
+//	line_textures[i]=SDL_CreateTextureFromSurface(renderer,surface);
+//	SDL_FreeSurface(surface);
+//}
+//   
 void update_line_texture(SDL_Renderer *renderer, TTF_Font *font, int i)
 {
-	if(line_textures[i]){
-		SDL_DestroyTexture(line_textures[i]);
-		line_textures[i]=NULL;
-	}
-	SDL_Color color= {255,255,255,255};
-	SDL_Surface *surface = TTF_RenderText_Blended(font,lines[i],color);
-	if(!surface){return;}
-	line_textures[i]=SDL_CreateTextureFromSurface(renderer,surface);
-	SDL_FreeSurface(surface);
-}
+    if (line_textures[i]) {
+        SDL_DestroyTexture(line_textures[i]);
+        line_textures[i] = NULL;
+    }
 
+    const char *line = lines[i];
+
+    int total_width = 0;
+    int height = TTF_FontHeight(font);
+
+    // --- FIRST PASS: calculate total width ---
+    int idx = 0;
+    while (line[idx]) {
+        char temp[128];
+        int j = 0;
+
+        if (line[idx] == '/' && line[idx+1] == '/') {
+            strcpy(temp, &line[idx]);
+            int w;
+            TTF_SizeText(font, temp, &w, NULL);
+            total_width += w;
+            break;
+        }
+
+        if (isalpha(line[idx])) {
+            while (isalnum(line[idx])) temp[j++] = line[idx++];
+        }
+        else if (isdigit(line[idx])) {
+            while (isdigit(line[idx])) temp[j++] = line[idx++];
+        }
+        else {
+            temp[j++] = line[idx++];
+        }
+
+        temp[j] = '\0';
+
+        int w;
+        TTF_SizeText(font, temp, &w, NULL);
+        total_width += w;
+    }
+
+    if (total_width == 0) total_width = 1;
+
+    // --- CREATE FINAL SURFACE ---
+    SDL_Surface *final_surface = SDL_CreateRGBSurface(
+        0, total_width, height, 32,
+        0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000
+    );
+
+    if (!final_surface) return;
+
+    SDL_FillRect(final_surface, NULL,
+        SDL_MapRGBA(final_surface->format, 0, 0, 0, 0));
+
+    // --- SECOND PASS: render tokens ---
+    int offset_x = 0;
+    idx = 0;
+
+    while (line[idx]) {
+        char temp[128];
+        int j = 0;
+        SDL_Color color = {255, 255, 255, 255};
+
+        // COMMENT
+        if (line[idx] == '/' && line[idx+1] == '/') {
+            strcpy(temp, &line[idx]);
+            color = (SDL_Color){100, 200, 100, 255};
+            idx += strlen(&line[idx]);
+        }
+
+        // WORD
+        else if (isalpha(line[idx])) {
+            while (isalnum(line[idx])) temp[j++] = line[idx++];
+            temp[j] = '\0';
+
+            if (is_keyword(temp))
+                color = (SDL_Color){80, 160, 255, 255};
+        }
+
+        // NUMBER
+        else if (isdigit(line[idx])) {
+            while (isdigit(line[idx])) temp[j++] = line[idx++];
+            temp[j] = '\0';
+
+            color = (SDL_Color){255, 200, 100, 255};
+        }
+
+        // SINGLE CHAR
+        else {
+            temp[j++] = line[idx++];
+            temp[j] = '\0';
+        }
+
+        SDL_Surface *s = TTF_RenderText_Blended(font, temp, color);
+        if (!s) continue;
+
+        SDL_Rect dst = {offset_x, 0, s->w, s->h};
+        SDL_BlitSurface(s, NULL, final_surface, &dst);
+
+        offset_x += s->w;
+
+        SDL_FreeSurface(s);
+    }
+
+    // --- CONVERT TO TEXTURE ---
+    line_textures[i] = SDL_CreateTextureFromSurface(renderer, final_surface);
+
+    SDL_FreeSurface(final_surface);
+}
 ////------FILE LOADING AND SAVING--------
 void load_file(const char* filename)
 {
