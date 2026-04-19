@@ -6,6 +6,14 @@
 #define MAX_LINES 100
 #define MAX_COLS  256
 #define CURSOR_BLINK_INTERVAL 700
+typedef struct{
+	int start_row,start_col;
+	int end_row,end_col;
+	int active;
+}Selection;
+
+Selection selection={0};
+
 SDL_Texture* line_textures[MAX_LINES];
 int dirty[MAX_LINES];
 int scroll_offset =0;
@@ -41,6 +49,17 @@ int is_keyword(const char *word){
 //	SDL_FreeSurface(surface);
 //}
 //   
+
+void normalize_selection(Selection *s){
+	if(s->start_row>s->end_row || (s->start_row == s->end_row && s->start_col>s->end_col)){
+	int tr=s->start_row,tc=s->start_col;
+	s->start_row=s->end_row;
+	s->start_col=s->end_col;
+	s->end_row=tr;
+	s->end_col=tc;
+	}
+}
+
 void update_line_texture(SDL_Renderer *renderer, TTF_Font *font, int i)
 {
     if (line_textures[i]) {
@@ -266,11 +285,12 @@ int main(int argc,char *argv[]) {
 
         while (SDL_PollEvent(&event)) {
 
-
             if (event.type == SDL_QUIT) running = 0;
-
+	    //----Selection of text-----
+	        
             // ---------- TEXT INPUT ----------
             if (event.type == SDL_TEXTINPUT) {
+		selection.active=0;
 		dirty[cursor_row]=1; // create texture again
                 char *line = lines[cursor_row];
                 int len = strlen(line);
@@ -295,7 +315,11 @@ int main(int argc,char *argv[]) {
 
             // ---- KEY EVENTS -----
             if (event.type == SDL_KEYDOWN) {
-		//CTRL + S 
+	//	printf("key pressed: %d, mod: %d\n", event.key.keysym.sym, event.key.keysym.mod);
+    		
+    
+	   	 int shift = event.key.keysym.mod&KMOD_SHIFT;	 
+	//CTRL + S 
 		if((event.key.keysym.sym==SDLK_s)&&(event.key.keysym.mod & KMOD_CTRL)){
 			if(strlen(current_file)>0){
 				save_file(current_file);
@@ -307,7 +331,8 @@ int main(int argc,char *argv[]) {
 		}
                 // BACKSPACE
                 if (event.key.keysym.sym == SDLK_BACKSPACE) {
-	   	    dirty[cursor_row]=1;
+	   	    selection.active=0;
+		    dirty[cursor_row]=1;
                     if (cursor_col > 0) {
                         char *line = lines[cursor_row];
 
@@ -338,7 +363,8 @@ int main(int argc,char *argv[]) {
 
                 // ENTER
                 if (event.key.keysym.sym == SDLK_RETURN) {
-	   	    dirty[cursor_row]=1;
+	   	    selection.active=0;
+            	    dirty[cursor_row]=1;
 	   	    dirty[cursor_row+1]=1;
                     char *line = lines[cursor_row];
                     for (int i = line_count; i > cursor_row + 1; i--) {
@@ -356,63 +382,209 @@ int main(int argc,char *argv[]) {
 
                 // ARROWS
                 if (event.key.keysym.sym == SDLK_LEFT) {
-                    if (cursor_col > 0) cursor_col--;
-                }
+                    if(!shift)selection.active=0;
+	            if (cursor_col > 0) cursor_col--;
+		    if (shift) {
+			if (!selection.active) {
+			    selection.start_row = cursor_row;
+			    selection.start_col = cursor_col + 1;
+			    selection.active = 1;
+			}
+			selection.end_row = cursor_row;
+			selection.end_col = cursor_col;
+		  }
+		}
 
                 if (event.key.keysym.sym == SDLK_RIGHT) {
-                    if (cursor_col < strlen(lines[cursor_row])) cursor_col++;
-                }
+			if(!shift)selection.active=0;
+			
+			if (cursor_col < strlen(lines[cursor_row])) cursor_col++;
+                	if(shift){
+				if(!selection.active){
+					selection.start_row=cursor_row;
+					selection.start_col=cursor_col-1;
+					selection.active=1;
+				}
+				selection.end_row=cursor_row;
+				selection.end_col=cursor_col;
+			} 
+		}
 
                 if (event.key.keysym.sym == SDLK_UP) {
-                    if (cursor_row > 0) {
+                        if (!shift) selection.active = 0;
+			if (cursor_row > 0) {
                         cursor_row--;
                         cursor_col = SDL_min(cursor_col, strlen(lines[cursor_row]));
-                    }
-                }
+                    	
+		    }
+			if (shift) {
+				if (!selection.active) {
+				    selection.start_row = cursor_row+1;
+				    selection.start_col = cursor_col;
+				    selection.active = 1;
+				}
+				selection.end_row = cursor_row;
+				selection.end_col = cursor_col;
+			    }
+		}
 
+		if ((event.key.keysym.mod & KMOD_CTRL) && event.key.keysym.sym == SDLK_c) {
+
+		    Selection s = selection;
+		    normalize_selection(&s);
+
+		    char clipboard[4096] = "";
+
+		    for (int i = s.start_row; i <= s.end_row; i++) {
+
+			int start = (i == s.start_row) ? s.start_col : 0;
+			int end   = (i == s.end_row)   ? s.end_col   : strlen(lines[i]);
+
+			strncat(clipboard, &lines[i][start], end - start);
+
+			if (i != s.end_row)
+			    strcat(clipboard, "\n");
+		    }
+
+		    SDL_SetClipboardText(clipboard);
+		}
+		if ((event.key.keysym.mod & KMOD_CTRL) && event.key.keysym.sym == SDLK_v) {
+
+		    char *clip = SDL_GetClipboardText();
+		    if (!clip) continue;
+
+		    char *line = lines[cursor_row];
+
+		    int len = strlen(line);
+
+		    if (len + strlen(clip) < MAX_COLS) {
+
+			memmove(&line[cursor_col + strlen(clip)],
+				&line[cursor_col],
+				len - cursor_col + 1);
+
+			memcpy(&line[cursor_col], clip, strlen(clip));
+
+			cursor_col += strlen(clip);
+
+			dirty[cursor_row] = 1;
+		    }
+
+		    SDL_free(clip);
+		}
                 if (event.key.keysym.sym == SDLK_DOWN) {
+		    if (!shift) selection.active = 0;
                     if (cursor_row < line_count - 1) {
                         cursor_row++;
                         cursor_col = SDL_min(cursor_col, strlen(lines[cursor_row]));
                     }
+		    if (shift) {
+			if (!selection.active) {
+			    selection.start_row = cursor_row-1;
+			    selection.start_col = cursor_col;
+			    selection.active = 1;
+			}
+			selection.end_row = cursor_row;
+			selection.end_col = cursor_col;
+		    }
                 }
+	
+
             }
         }
+	SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
+	SDL_RenderClear(renderer);
 
-        //------ RENDER------
-        SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
-        SDL_RenderClear(renderer);
-	
 	int line_height = TTF_FontHeight(font);
-        int window_height,window_width;
-	SDL_GetWindowSize(window, &window_width,&window_height);
-	int visible_lines=(window_height-50)/line_height ;
-	
-	if(cursor_row<scroll_offset){
-		scroll_offset=cursor_row;
+
+	int window_height, window_width;
+	SDL_GetWindowSize(window, &window_width, &window_height);
+
+	int visible_lines = (window_height - 50) / line_height;
+
+	// scroll logic
+	if (cursor_row < scroll_offset) {
+	    scroll_offset = cursor_row;
 	}
-	if(cursor_row>=scroll_offset+visible_lines){
-		scroll_offset=cursor_row-visible_lines+1;
+	if (cursor_row >= scroll_offset + visible_lines) {
+	    scroll_offset = cursor_row - visible_lines + 1;
 	}
 
 	for (int i = 0; i < visible_lines; i++) {
-        	int line_index=scroll_offset+i;
-		if(line_index>=line_count)break;
+	    int line_index = scroll_offset + i;
+	    if (line_index >= line_count) break;
 
-		if(dirty[line_index]){
-			update_line_texture(renderer,font,line_index);
-			dirty[line_index]=0;
+	    int y = 50 + i * line_height;
+
+	    // update texture if dirty
+	    if (dirty[line_index]) {
+		update_line_texture(renderer, font, line_index);
+		dirty[line_index] = 0;
+	    }
+
+	    // -------------------------
+	    //  SELECTION RENDERING
+	    // -------------------------
+	    if (selection.active) {
+		Selection s = selection;
+		normalize_selection(&s);
+
+		if (line_index >= s.start_row && line_index <= s.end_row) {
+
+		    int start_x = 50;
+		    int end_x = 50;
+
+		    char temp[MAX_COLS];
+
+		    // start column
+		    if (line_index == s.start_row) {
+			strncpy(temp, lines[line_index], s.start_col);
+			temp[s.start_col] = '\0';
+
+			int w;
+			TTF_SizeText(font, temp, &w, NULL);
+			start_x += w;
+		    }
+
+		    // end column
+		    if (line_index == s.end_row) {
+			strncpy(temp, lines[line_index], s.end_col);
+			temp[s.end_col] = '\0';
+
+			int w;
+			TTF_SizeText(font, temp, &w, NULL);
+			end_x += w;
+		    } else {
+			int w;
+			TTF_SizeText(font, lines[line_index], &w, NULL);
+			end_x += w;
+		    }
+
+		    SDL_Rect rect = {
+			start_x,
+			y,
+			end_x - start_x,
+			line_height
+		    };
+
+		    SDL_SetRenderDrawColor(renderer, 60, 60, 120, 255);
+		    SDL_RenderFillRect(renderer, &rect);
 		}
-		if(line_textures[line_index]){
-			int w,h;
-			SDL_QueryTexture(line_textures[line_index],NULL,NULL,&w,&h);
-			SDL_Rect dst={50,50+i*line_height,w,h};
-			SDL_RenderCopy(renderer,line_textures[line_index],NULL,&dst);
+	    }
 
-		}
-	}
+	    // -------------------------
+	    //  TEXTURE RENDERING
+	    // -------------------------
+	    if (line_textures[line_index]) {
+		int w, h;
+		SDL_QueryTexture(line_textures[line_index], NULL, NULL, &w, &h);
 
-        // ---- CURSOR ------
+		SDL_Rect dst = {50, y, w, h};
+		SDL_RenderCopy(renderer, line_textures[line_index], NULL, &dst);
+	    }
+	}        
+
+	// ---- CURSOR ------
 	
 	char temp[MAX_COLS];
 	strncpy(temp,lines[cursor_row],cursor_col);
