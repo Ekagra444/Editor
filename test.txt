@@ -1,5 +1,9 @@
-this is a 
-test file 
-for testing ... 
-the editor 
+This is a 
+test file intended 
+for testing
+the editor's 
+feature to copy content from
+test file, if provided 
+as an arguent to main function
 THANKS ...|||
+
