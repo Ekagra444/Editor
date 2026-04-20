@@ -3,14 +3,31 @@
 #include <stdio.h>
 #include <string.h>
 
+#define MAX_HISTORY 100
 #define MAX_LINES 100
 #define MAX_COLS  256
 #define CURSOR_BLINK_INTERVAL 700
+
 typedef struct{
 	int start_row,start_col;
 	int end_row,end_col;
 	int active;
 }Selection;
+
+typedef struct{
+	char lines[MAX_LINES][MAX_COLS];
+	int line_count;
+	int cursor_row;
+	int cursor_col;
+}EditorState;
+
+// history stacks of undo and redo 
+EditorState undo_stack[MAX_HISTORY];
+int undo_top=-1;
+
+EditorState redo_stack[MAX_HISTORY];
+int redo_top=-1;
+
 
 Selection selection={0};
 
@@ -34,9 +51,27 @@ int is_keyword(const char *word){
 	return 0;
 }
 void normalize_selection(Selection*);
+
+void save_state(){
+	if(undo_top>=MAX_HISTORY-1)return;
+	undo_top++;
+	EditorState *s= &undo_stack[undo_top];
+	for(int i=0;i<line_count;i++){
+		strcpy(s->lines[i],lines[i]);
+	}
+	s->line_count=line_count;
+	s->cursor_row=cursor_row;
+	s->cursor_col=cursor_col;
+
+	redo_top=-1;
+}
+
+
 // ---- DELETION SELECTION----
+
 void delete_selection(){
 	if(!selection.active)return;
+	save_state();
 	normalize_selection(&selection);
 	int sr = selection.start_row;
 	int sc = selection.start_col;
@@ -70,7 +105,18 @@ void delete_selection(){
 	selection.active=0;
 	
 }
-// -----Texture creation per line------
+void restore_state(EditorState *s){
+	line_count = s->line_count;
+	cursor_row=s->cursor_row;
+	cursor_col=s->cursor_col;
+
+	for(int i=0;i<line_count;i++){
+		strcpy(lines[i],s->lines[i]);
+		dirty[i]=1;
+	}
+}
+
+
 //void update_line_texture(SDL_Renderer *renderer, TTF_Font *font, int i)
 //{
 //	if(line_textures[i]){
@@ -107,18 +153,13 @@ void update_line_texture(SDL_Renderer *renderer, TTF_Font *font, int i)
     const char *line = lines[i];
 
     int total_width = 0;
-    int height = TTF_FontHeight(font);
-
-    // --- FIRST PASS: calculate total width ---
-    int idx = 0;
-    while (line[idx]) {
-        char temp[128];
-        int j = 0;
-
-        if (line[idx] == '/' && line[idx+1] == '/') {
-            strcpy(temp, &line[idx]);
-            int w;
-            TTF_SizeText(font, temp, &w, NULL);
+    int height = TTF_FontHeight(font); // --- FIRST PASS: calculate total width ---
+       int idx = 0;
+       while (line[idx]) { 
+       		char temp[128]; int j = 0;
+		if (line[idx] == '/' && line[idx+1] == '/') {
+		       	strcpy(temp, &line[idx]);
+            int w; TTF_SizeText(font, temp, &w, NULL);
             total_width += w;
             break;
         }
@@ -330,6 +371,7 @@ int main(int argc,char *argv[]) {
 		if(selection.active){
 			delete_selection();
 		}
+		save_state();
 		//selection.active=0;
 		dirty[cursor_row]=1; // create texture again
                 char *line = lines[cursor_row];
@@ -362,19 +404,14 @@ int main(int argc,char *argv[]) {
 	//CTRL + S 
 		if((event.key.keysym.sym==SDLK_s)&&(event.key.keysym.mod & KMOD_CTRL)){
 			if(strlen(current_file)>0){
-				save_file(current_file);
-			}
-			else{
-				save_file("output.txt");
-			}
-		
-		}
+				save_file(current_file); } else{ save_file("output.txt"); } }
                 // BACKSPACE
                 if (event.key.keysym.sym == SDLK_BACKSPACE) {
 	   	    if(selection.active){
 		      delete_selection();
 		     break; 
-		    } 
+		    }
+		    save_state(); 
 		    dirty[cursor_row]=1;
                     if (cursor_col > 0) {
                         char *line = lines[cursor_row];
@@ -403,12 +440,49 @@ int main(int argc,char *argv[]) {
                         cursor_col = prev_len;
                     }
                 }
+		// CTRL + Z (UNDO)
+		if((event.key.keysym.mod&KMOD_CTRL)&& event.key.keysym.sym==SDLK_z){
+			if(undo_top>=0){
+				//push current state to redo
+				if(redo_top<MAX_HISTORY-1){
+					redo_top++;
+					EditorState *r= &redo_stack[redo_top];
+					for(int i=0;i<line_count;i++){
+						strcpy(r->lines[i],lines[i]);
+					}
+					r->line_count=line_count;
+					r->cursor_row=cursor_row;
+					r->cursor_col=cursor_col;
+				}
+				restore_state(&undo_stack[undo_top]);
+				undo_top=undo_top-1;
+			}
+		
+		}
 
+		//CTRL + Y (redo)
+		if((event.key.keysym.mod&KMOD_CTRL)&&event.key.keysym.sym==SDLK_y){
+			if(redo_top>=0){
+				if(undo_top<MAX_HISTORY-1){
+					undo_top++;
+					EditorState *u = &undo_stack[undo_top];
+					for(int i=0;i<line_count;i++){
+						strcpy(u->lines[i],lines[i]);
+					}
+					u->line_count=line_count;
+					u->cursor_row=cursor_row;
+					u->cursor_col=cursor_col;
+				}
+				restore_state(&redo_stack[redo_top]);
+				redo_top--;
+			}
+		}
                 // ENTER
                 if (event.key.keysym.sym == SDLK_RETURN) {
 		    if(selection.active){
 		   	delete_selection(); 
 		    }
+		    save_state();	
 		    dirty[cursor_row]=1;
 	   	    dirty[cursor_row+1]=1;
                     char *line = lines[cursor_row];
@@ -495,7 +569,7 @@ int main(int argc,char *argv[]) {
 		}
 		// CTRL + V (PASTE)
 		if ((event.key.keysym.mod & KMOD_CTRL) && event.key.keysym.sym == SDLK_v) {
-
+		    save_state();
 		    char *clip = SDL_GetClipboardText();
 		    if (!clip) continue;
 
