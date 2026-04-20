@@ -33,6 +33,43 @@ int is_keyword(const char *word){
 	}
 	return 0;
 }
+void normalize_selection(Selection*);
+// ---- DELETION SELECTION----
+void delete_selection(){
+	if(!selection.active)return;
+	normalize_selection(&selection);
+	int sr = selection.start_row;
+	int sc = selection.start_col;
+	int er = selection.end_row;
+	int ec = selection.end_col;
+
+	// same line 
+	if(sr==er){
+		char *line=lines[sr];
+		memmove(&line[sc],&line[ec],strlen(line)-ec+1);
+		cursor_row=sr;
+		cursor_col=sc;
+		dirty[sr]=1;
+	}
+	else{
+		char *start_line = lines[sr];
+		char *end_line = lines[er];
+		start_line[sc]='\0';
+		strcat(start_line,&end_line[ec]);
+		//shift up 
+		int shift = er-ec;
+		for(int i=sr+1;i<line_count-shift;i++){
+			strcpy(lines[i],lines[i+shift]);
+			dirty[i]=1;
+		}	
+		line_count-=shift;
+		cursor_row=sr;
+		cursor_col=sc;
+		dirty[sr]=1;
+	}
+	selection.active=0;
+	
+}
 // -----Texture creation per line------
 //void update_line_texture(SDL_Renderer *renderer, TTF_Font *font, int i)
 //{
@@ -290,7 +327,10 @@ int main(int argc,char *argv[]) {
 	        
             // ---------- TEXT INPUT ----------
             if (event.type == SDL_TEXTINPUT) {
-		selection.active=0;
+		if(selection.active){
+			delete_selection();
+		}
+		//selection.active=0;
 		dirty[cursor_row]=1; // create texture again
                 char *line = lines[cursor_row];
                 int len = strlen(line);
@@ -331,7 +371,10 @@ int main(int argc,char *argv[]) {
 		}
                 // BACKSPACE
                 if (event.key.keysym.sym == SDLK_BACKSPACE) {
-	   	    selection.active=0;
+	   	    if(selection.active){
+		      delete_selection();
+		     break; 
+		    } 
 		    dirty[cursor_row]=1;
                     if (cursor_col > 0) {
                         char *line = lines[cursor_row];
@@ -363,8 +406,10 @@ int main(int argc,char *argv[]) {
 
                 // ENTER
                 if (event.key.keysym.sym == SDLK_RETURN) {
-	   	    selection.active=0;
-            	    dirty[cursor_row]=1;
+		    if(selection.active){
+		   	delete_selection(); 
+		    }
+		    dirty[cursor_row]=1;
 	   	    dirty[cursor_row+1]=1;
                     char *line = lines[cursor_row];
                     for (int i = line_count; i > cursor_row + 1; i--) {
@@ -427,7 +472,7 @@ int main(int argc,char *argv[]) {
 				selection.end_col = cursor_col;
 			    }
 		}
-
+		// CTRL+ C(copy)
 		if ((event.key.keysym.mod & KMOD_CTRL) && event.key.keysym.sym == SDLK_c) {
 
 		    Selection s = selection;
@@ -448,29 +493,59 @@ int main(int argc,char *argv[]) {
 
 		    SDL_SetClipboardText(clipboard);
 		}
+		// CTRL + V (PASTE)
 		if ((event.key.keysym.mod & KMOD_CTRL) && event.key.keysym.sym == SDLK_v) {
 
 		    char *clip = SDL_GetClipboardText();
 		    if (!clip) continue;
 
-		    char *line = lines[cursor_row];
-
-		    int len = strlen(line);
-
-		    if (len + strlen(clip) < MAX_COLS) {
-
-			memmove(&line[cursor_col + strlen(clip)],
-				&line[cursor_col],
-				len - cursor_col + 1);
-
-			memcpy(&line[cursor_col], clip, strlen(clip));
-
-			cursor_col += strlen(clip);
-
-			dirty[cursor_row] = 1;
+		    if(selection.active){
+		    delete_selection();
 		    }
+		    char *line = lines[cursor_row];
+		    char *newline= strchr(clip,'\n');
+		    if(!newline){
 
-		    SDL_free(clip);
+			    int len = strlen(line);
+
+			    if (len + strlen(clip) < MAX_COLS) {
+
+				memmove(&line[cursor_col + strlen(clip)],
+					&line[cursor_col],
+					len - cursor_col + 1);
+
+				memcpy(&line[cursor_col], clip, strlen(clip));
+
+				cursor_col += strlen(clip);
+
+				dirty[cursor_row] = 1;
+			    }
+
+			    SDL_free(clip);
+		   }
+		    else{
+			    char first[MAX_COLS], last[MAX_COLS];
+			    strncpy(first,clip,newline-clip);
+			    first[newline-clip]='\0';
+			    strcpy(last,&newline[1]);
+			    //split current line 
+			    char tail[MAX_COLS];
+			    strcpy(tail,&line[cursor_col]);
+			    line[cursor_col]='\0';
+			    strcat(line,first);
+			    dirty[cursor_row]=1;
+			    //shift lines down 
+			    for(int i=line_count;i>cursor_row+1;i--){
+			    	strcpy(lines[i],lines[i-1]);
+			    }
+			    strcpy(lines[cursor_row+1],last);
+			    strcat(lines[cursor_row+1],tail);
+			    line_count++;
+			    cursor_row++;
+			    cursor_col=strlen(last);
+			    dirty[cursor_row]=1;
+			    SDL_free(clip);
+		    }
 		}
                 if (event.key.keysym.sym == SDLK_DOWN) {
 		    if (!shift) selection.active = 0;
