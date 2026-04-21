@@ -2,11 +2,13 @@
 #include <SDL_ttf.h>
 #include <stdio.h>
 #include <string.h>
+#include<dirent.h>
 
 #define MAX_HISTORY 100
 #define MAX_LINES 100
 #define MAX_COLS  256
 #define CURSOR_BLINK_INTERVAL 700
+#define MAX_FILES 256
 
 typedef struct{
 	int start_row,start_col;
@@ -44,6 +46,55 @@ const char *keywords[] = {
     "int", "return", "if", "else", "while", "for", "void", "char", "float", "double"
 };
 int keyword_count = sizeof(keywords) / sizeof(keywords[0]);
+char files[MAX_FILES][256];
+int file_count=0;
+int selected_file=0;
+int editor_x=260;
+// --- Funcitons -----
+// Load directory for sidebar
+void load_directory(const char *path){
+	DIR *dir = opendir(path);
+	if(!dir){
+		printf("couldn't open directory\n");
+		return;
+	}
+	struct dirent *entry;
+	file_count=0;
+	while((entry=readdir(dir))!=NULL&&file_count<MAX_FILES){
+		if(strcmp(entry->d_name,".")==0||strcmp(entry->d_name,"..")==0)continue;
+		strcpy(files[file_count],entry->d_name);
+		file_count++;
+	}
+	closedir(dir);
+}
+//Sidebar
+void render_sidebar(SDL_Renderer *renderer, TTF_Font *font){
+	int sidebar_width=250;
+	int line_height = TTF_FontHeight(font);
+
+	//background
+	SDL_Rect bg = {0,0,sidebar_width,600};
+	SDL_SetRenderDrawColor(renderer,40,40,40,255);
+	SDL_RenderFillRect(renderer,&bg);
+
+	for(int i=0;i<file_count;i++){
+		int y = 10 + i*line_height;
+		SDL_Color color = {200,200,200,255};
+		if(i==selected_file){
+			SDL_SetRenderDrawColor(renderer,80,80,120,255);
+			SDL_Rect sel = {0,y,sidebar_width,line_height};
+			SDL_RenderFillRect(renderer,&sel);
+			color=(SDL_Color){255,255,255,255};
+		}
+		SDL_Surface *s = TTF_RenderText_Blended(font,files[i],color);
+		SDL_Texture *t=SDL_CreateTextureFromSurface(renderer,s);
+		SDL_Rect dst={10,y,s->w,s->h};
+		SDL_RenderCopy(renderer,t,NULL,&dst);
+		SDL_FreeSurface(s);
+		SDL_DestroyTexture(t);
+	}
+}
+
 int is_keyword(const char *word){
 	for(int i=0;i<keyword_count;i++){
 		if(strcmp(word,keywords[i])==0)return 1;
@@ -332,7 +383,7 @@ int main(int argc,char *argv[]) {
     }	
     SDL_Init(SDL_INIT_VIDEO);
     TTF_Init();
-
+    load_directory(".");
     SDL_Window *window = SDL_CreateWindow(
         "Ekagra Editor",
         SDL_WINDOWPOS_CENTERED,
@@ -621,8 +672,23 @@ int main(int argc,char *argv[]) {
 			    SDL_free(clip);
 		    }
 		}
+
+		//SIDEBAR OPERATION
+		if(event.key.keysym.mod&KMOD_ALT){
+			if(event.key.keysym.sym==SDLK_RETURN){
+				load_file(files[selected_file]);
+				for(int i=0;i<line_count;i++){
+					dirty[i]=1;
+				}
+			}
+			if(event.key.keysym.sym==SDLK_UP&&selected_file>0){
+				selected_file--;
+			}	
+			if(event.key.keysym.sym==SDLK_DOWN&&selected_file<file_count-1){
+				selected_file++;
+			}
+		}
                 if (event.key.keysym.sym == SDLK_DOWN) {
-		    if (!shift) selection.active = 0;
                     if (cursor_row < line_count - 1) {
                         cursor_row++;
                         cursor_col = SDL_min(cursor_col, strlen(lines[cursor_row]));
@@ -662,7 +728,7 @@ int main(int argc,char *argv[]) {
 	for (int i = 0; i < visible_lines; i++) {
 	    int line_index = scroll_offset + i;
 	    if (line_index >= line_count) break;
-
+	    render_sidebar(renderer,font);
 	    int y = 50 + i * line_height;
 
 	    // update texture if dirty
@@ -680,8 +746,8 @@ int main(int argc,char *argv[]) {
 
 		if (line_index >= s.start_row && line_index <= s.end_row) {
 
-		    int start_x = 50;
-		    int end_x = 50;
+		    int start_x = 260;
+		    int end_x = 260;
 
 		    char temp[MAX_COLS];
 
@@ -728,7 +794,7 @@ int main(int argc,char *argv[]) {
 		int w, h;
 		SDL_QueryTexture(line_textures[line_index], NULL, NULL, &w, &h);
 
-		SDL_Rect dst = {50, y, w, h};
+		SDL_Rect dst = {editor_x, y, w, h};
 		SDL_RenderCopy(renderer, line_textures[line_index], NULL, &dst);
 	    }
 	}        
@@ -741,7 +807,7 @@ int main(int argc,char *argv[]) {
 	int cursor_offset=0;
 	TTF_SizeText(font,temp,&cursor_offset,NULL);
 
-        int cursor_x = 50 + cursor_offset;
+        int cursor_x = 260 + cursor_offset;
         int cursor_y = 50 +(cursor_row-scroll_offset) * line_height;
 	Uint32 current_time = SDL_GetTicks();
 	int show_cursor = (current_time/CURSOR_BLINK_INTERVAL)%2==0;
