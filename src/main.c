@@ -57,6 +57,13 @@ int selected_file=0;
 int editor_x=260;
 int editor_y_offset=40;
 
+int search_mode=0;
+char search_query[128]="";
+int search_len=0;
+
+int match_row=-1;
+int match_col=-1;
+
 const char *keywords[] = {
     "int", "return", "if", "else", "while", "for", "void", "char", "float", "double"
 };
@@ -395,6 +402,20 @@ void render_text(SDL_Renderer *renderer, TTF_Font *font, const char *text, int x
     SDL_DestroyTexture(texture);
 }
 
+void find_next(EditorBuffer *buf){
+	for(int i=buf->cursor_row;i<buf->line_count;i++){
+		char *pos=strstr(buf->lines[i],search_query);
+		if(pos){
+			match_row=i;
+			match_col=pos-buf->lines[i];
+
+			buf->cursor_row=i;
+			buf->cursor_col=match_col;
+			return;
+		}
+	}
+}
+
 // ---- MAIN ------
 int main(int argc,char *argv[]) {
     SDL_Init(SDL_INIT_VIDEO);
@@ -442,6 +463,13 @@ int main(int argc,char *argv[]) {
                 if(buf->selection.active){
                     delete_selection(buf);
                 }
+		if(search_mode){
+			if(search_len<sizeof(search_query)-1){
+				strcat(search_query,event.text.text);
+				search_len++;
+			}
+			break;//change
+		}
                 save_state(buf);
                 buf->dirty_flags[buf->cursor_row]=1;
                 char *line = buf->lines[buf->cursor_row];
@@ -466,7 +494,19 @@ int main(int argc,char *argv[]) {
             // ---- KEY EVENTS -----
             if (event.type == SDL_KEYDOWN) {
                 int shift = event.key.keysym.mod&KMOD_SHIFT;
-
+		if(search_mode && event.key.keysym.sym==SDLK_ESCAPE){search_mode=0;
+		}
+		if(search_mode && event.key.keysym.sym==SDLK_RETURN){
+			EditorBuffer *buf=&tabs[active_tab];
+			find_next(buf);
+		}
+		//CTRL + F - search
+		if((event.key.keysym.mod & KMOD_CTRL)&&event.key.keysym.sym==SDLK_f){
+		search_mode=1;
+		search_len=0;
+		search_query[0]='\0';	
+			
+		}
                 // CTRL + TAB — switch tabs
                 if((event.key.keysym.mod & KMOD_CTRL) && event.key.keysym.sym == SDLK_TAB){
                     if(shift){
@@ -489,6 +529,12 @@ int main(int argc,char *argv[]) {
                         delete_selection(buf);
                         break;
                     }
+		    if(search_mode){
+		    	if(search_len>0){
+				search_query[--search_len]='\0';
+				break; //change
+			}
+		    }
                     save_state(buf);
                     buf->dirty_flags[buf->cursor_row]=1;
                     if (buf->cursor_col > 0) {
@@ -732,8 +778,62 @@ int main(int argc,char *argv[]) {
 
         render_sidebar(renderer, font);
         render_tabs(renderer, font);
+	// highlight matches
+	int scroll_offset= buf->scroll_offset;  
+	if (search_mode && strlen(search_query) > 0) {
 
-        for (int i = 0; i < visible_lines; i++) {
+	    for (int i = scroll_offset; i < scroll_offset + visible_lines; i++) {
+
+		if (i >= buf->line_count) break;
+
+		char *pos = strstr(buf->lines[i], search_query);
+
+		if (pos) {
+		    int col = pos - buf->lines[i];
+
+		    char temp[MAX_COLS];
+		    strncpy(temp, buf->lines[i], col);
+		    temp[col] = '\0';
+
+		    int offset;
+		    TTF_SizeText(font, temp, &offset, NULL);
+
+		    int match_w;
+		    TTF_SizeText(font, search_query, &match_w, NULL);
+
+		    int x = editor_x + offset;
+		    int y = editor_y_offset + (i - scroll_offset) * line_height;
+
+		    SDL_Rect rect = {x, y, match_w, line_height+7};
+
+		    SDL_SetRenderDrawColor(renderer, 120, 120, 40, 255);
+		    SDL_RenderFillRect(renderer, &rect);
+		}
+	    }
+	}
+
+	if (search_mode) {
+
+	    SDL_Rect bar = {260, 0, 400, 30};
+	    SDL_SetRenderDrawColor(renderer, 20, 20, 20, 255);
+	    SDL_RenderFillRect(renderer, &bar);
+
+	    char display[160];
+	    sprintf(display, "Search: %s", search_query);
+
+	    SDL_Color color = {255, 255, 255, 255};
+
+	    SDL_Surface *s = TTF_RenderText_Blended(font, display, color);
+	    SDL_Texture *t = SDL_CreateTextureFromSurface(renderer, s);
+
+	    SDL_Rect dst = {270, 5, s->w, s->h};
+	    SDL_RenderCopy(renderer, t, NULL, &dst);
+
+	    SDL_FreeSurface(s);
+	    SDL_DestroyTexture(t);
+	}
+
+	for (int i = 0; i < visible_lines; i++) {
             int line_index = buf->scroll_offset + i;
             if (line_index >= buf->line_count) break;
 
