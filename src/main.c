@@ -61,8 +61,8 @@ int search_mode=0;
 char search_query[128]="";
 int search_len=0;
 
-int match_row=-1;
-int match_col=-1;
+int last_match_row=-1;
+int last_match_col=-1;
 
 const char *keywords[] = {
     "int", "return", "if", "else", "while", "for", "void", "char", "float", "double"
@@ -403,18 +403,42 @@ void render_text(SDL_Renderer *renderer, TTF_Font *font, const char *text, int x
 }
 
 void find_next(EditorBuffer *buf){
-	for(int i=buf->cursor_row;i<buf->line_count;i++){
-		char *pos=strstr(buf->lines[i],search_query);
+	if(strlen(search_query)==0)return;
+	int start_row=last_match_row;
+	int start_col=last_match_col+1;
+	if(start_row<0){
+		start_row=buf->cursor_row;
+		start_col=buf->cursor_col;
+	}
+	for(int i=start_row;i<buf->line_count;i++){
+		char *line = buf->lines[i];
+		char *pos;
+		if(i==start_row){
+			pos=strstr(line+start_col,search_query);
+		}
+		else{
+		pos=strstr(line,search_query);
+		}
 		if(pos){
-			match_row=i;
-			match_col=pos-buf->lines[i];
-
+			last_match_row=i;
+			last_match_col=pos-line;
 			buf->cursor_row=i;
-			buf->cursor_col=match_col;
+			buf->cursor_col=last_match_col;
 			return;
 		}
 	}
-}
+	for(int i=0;i<=start_row;i++){
+		char *line=buf->lines[i];
+		char *pos=strstr(line,search_query);
+		if(pos){
+			last_match_row=i;
+			last_match_col=pos-line;
+			buf->cursor_row=i;
+			buf->cursor_col=last_match_col;
+			return;
+		}
+	}
+}	
 
 // ---- MAIN ------
 int main(int argc,char *argv[]) {
@@ -464,6 +488,8 @@ int main(int argc,char *argv[]) {
                     delete_selection(buf);
                 }
 		if(search_mode){
+			last_match_row=-1;
+			last_match_col=-1;
 			if(search_len<sizeof(search_query)-1){
 				strcat(search_query,event.text.text);
 				search_len++;
@@ -496,11 +522,7 @@ int main(int argc,char *argv[]) {
                 int shift = event.key.keysym.mod&KMOD_SHIFT;
 		if(search_mode && event.key.keysym.sym==SDLK_ESCAPE){search_mode=0;
 		}
-		if(search_mode && event.key.keysym.sym==SDLK_RETURN){
-			EditorBuffer *buf=&tabs[active_tab];
-			find_next(buf);
-		}
-		//CTRL + F - search
+				//CTRL + F - search
 		if((event.key.keysym.mod & KMOD_CTRL)&&event.key.keysym.sym==SDLK_f){
 		search_mode=1;
 		search_len=0;
@@ -597,6 +619,18 @@ int main(int argc,char *argv[]) {
 
                 // ENTER
                 if (event.key.keysym.sym == SDLK_RETURN) {
+	            if(search_mode){
+			EditorBuffer *buf=&tabs[active_tab];
+			find_next(buf);
+//			if(buf->cursor_row<buf->scroll_offset){
+//				buf->scroll_offset=buf->cursor_row;
+//			}
+//			if(buf->cursor_row>=buf->scroll_offset+visible_lines){
+//				buf->scroll_offset=buf->cursor_row-visible_lines+1;
+//			}
+		        break;
+		    }
+	
                     if(buf->selection.active){
                         delete_selection(buf);
                     }
@@ -802,9 +836,9 @@ int main(int argc,char *argv[]) {
 		    TTF_SizeText(font, search_query, &match_w, NULL);
 
 		    int x = editor_x + offset;
-		    int y = editor_y_offset + (i - scroll_offset) * line_height;
+		    int y = 5+editor_y_offset + (i - scroll_offset) * line_height;
 
-		    SDL_Rect rect = {x, y, match_w, line_height+7};
+		    SDL_Rect rect = {x, y, match_w, line_height};
 
 		    SDL_SetRenderDrawColor(renderer, 120, 120, 40, 255);
 		    SDL_RenderFillRect(renderer, &rect);
