@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include<dirent.h>
+#include <sys/stat.h>
 
 #define MAX_HISTORY 100
 #define MAX_LINES 100
@@ -46,8 +47,27 @@ typedef struct {
 	int modified;
 	Selection selection;
 } EditorBuffer;
+typedef struct FileNode {
+    char name[256];
+    char path[512];
+    int is_dir;
+
+    struct FileNode *children[128];
+    int child_count;
+
+    int expanded;
+} FileNode;
+typedef struct {
+    FileNode *node;
+    int depth;
+} VisibleNode;
+
+VisibleNode visible[512];
+int visible_count = 0;
+int selected_index = 0;
 
 EditorBuffer tabs[MAX_TABS];
+
 int tab_count = 0;
 int active_tab = 0;
 
@@ -68,6 +88,7 @@ int last_match_col=-1;
 int command_mode=0;
 char command_buffer[256]="";
 int command_len=0;
+FileNode *root=NULL;
 const char *keywords[] = {
     "int", "return", "if", "else", "while", "for", "void", "char", "float", "double"
 };
@@ -89,33 +110,50 @@ void load_directory(const char *path){
 	}
 	closedir(dir);
 }
-
 void render_sidebar(SDL_Renderer *renderer, TTF_Font *font){
-	int sidebar_width=250;
-	int line_height = TTF_FontHeight(font);
+    int sidebar_width = 250;
+    int line_height = TTF_FontHeight(font);
 
-	SDL_Rect bg = {0,0,sidebar_width,600};
-	SDL_SetRenderDrawColor(renderer,40,40,40,255);
-	SDL_RenderFillRect(renderer,&bg);
+    SDL_Rect bg = {0, 0, sidebar_width, 600};
+    SDL_SetRenderDrawColor(renderer, 40, 40, 40, 255);
+    SDL_RenderFillRect(renderer, &bg);
 
-	for(int i=0;i<file_count;i++){
-		int y = 10 + i*line_height;
-		SDL_Color color = {200,200,200,255};
-		if(i==selected_file){
-			SDL_SetRenderDrawColor(renderer,80,80,120,255);
-			SDL_Rect sel = {0,y,sidebar_width,line_height};
-			SDL_RenderFillRect(renderer,&sel);
-			color=(SDL_Color){255,255,255,255};
-		}
-		SDL_Surface *s = TTF_RenderText_Blended(font,files[i],color);
-		SDL_Texture *t=SDL_CreateTextureFromSurface(renderer,s);
-		SDL_Rect dst={10,y,s->w,s->h};
-		SDL_RenderCopy(renderer,t,NULL,&dst);
-		SDL_FreeSurface(s);
-		SDL_DestroyTexture(t);
-	}
+    for (int i = 0; i < visible_count; i++) {  
+
+        int y = 10 + i * line_height;
+
+        SDL_Color color = {200, 200, 200, 255};
+
+        if (i == selected_index) {                         
+	    SDL_SetRenderDrawColor(renderer, 80, 80, 120, 255);
+            SDL_Rect sel = {0, y, sidebar_width, line_height};
+            SDL_RenderFillRect(renderer, &sel);
+            color = (SDL_Color){255, 255, 255, 255};
+        }
+
+        char display[300];
+
+        if (visible[i].node->is_dir) {
+            sprintf(display, "%s %s",
+                visible[i].node->expanded ? "[-]" : "[+]",
+                visible[i].node->name);
+        } else {
+            sprintf(display, "    %s", visible[i].node->name);
+        }
+
+        SDL_Surface *s = TTF_RenderText_Blended(font, display, color);
+        SDL_Texture *t = SDL_CreateTextureFromSurface(renderer, s);
+
+        int indent = visible[i].depth * 15;
+
+        SDL_Rect dst = {10 + indent, y, s->w, s->h};
+
+        SDL_RenderCopy(renderer, t, NULL, &dst);
+
+        SDL_FreeSurface(s);
+        SDL_DestroyTexture(t);
+    }
 }
-
 void render_tabs(SDL_Renderer *renderer, TTF_Font *font) {
     int current_x = 260; // Starting x position
     int height = 30;
@@ -442,19 +480,29 @@ void execute_command(const char *cmd){
 		if(fp){
 			fclose(fp);
 		}
-		load_directory(".");
+		free_tree(root);
+		root = create_node(".", ".", 1);
+		root->expanded = 1;
+		build_tree(root);
 	}
 	else if(strncmp(cmd,":del ",5)==0){
 		const char *filename = cmd + 5;
 		remove(filename);
-		load_directory(".");
+		free_tree(root);
+		root = create_node(".", ".", 1);
+		root->expanded = 1;
+		build_tree(root);
 	}
 	else if(strncmp(cmd,":ren ",5)==0){
 		char oldname[128],newname[128];
 
 		sscanf(cmd + 4, "%s %s", oldname,newname);
 		rename(oldname,newname);
-		load_directory(".");
+		free_tree(root);
+		root = create_node(".", ".", 1);
+		root->expanded = 1;
+		build_tree(root);
+
 	}
 	else if(strncmp(cmd,":open ",6)==0){
 		open_file_in_tab(cmd+5);
@@ -514,12 +562,60 @@ void find_next(EditorBuffer *buf){
 	}
 }	
 
+FileNode* create_node(const char *name, const char *path, int is_dir) {
+    FileNode *n = malloc(sizeof(FileNode));
+    strcpy(n->name, name);
+    strcpy(n->path, path);
+    n->is_dir = is_dir;
+    n->child_count = 0;
+    n->expanded = 0;
+    return n;
+}
+void build_tree(FileNode *parent) {
+
+    DIR *dir = opendir(parent->path);
+    if (!dir) return;
+
+    struct dirent *entry;
+
+    while ((entry = readdir(dir))) {
+
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
+
+        char full[512];
+        sprintf(full, "%s/%s", parent->path, entry->d_name);
+
+        struct stat st;
+        if (stat(full, &st) == -1) continue;
+
+        int is_dir = S_ISDIR(st.st_mode);
+
+        FileNode *child = create_node(entry->d_name, full, is_dir);
+
+        parent->children[parent->child_count++] = child;
+    }
+
+    closedir(dir);
+}
+void build_visible(FileNode *node, int depth) {
+
+    visible[visible_count++] = (VisibleNode){node, depth};
+
+    if (node->is_dir && node->expanded) {
+        for (int i = 0; i < node->child_count; i++) {
+            build_visible(node->children[i], depth + 1);
+        }
+    }
+}
 // ---- MAIN ------
 int main(int argc,char *argv[]) {
     SDL_Init(SDL_INIT_VIDEO);
     TTF_Init();
     load_directory(".");
-
+    root = create_node(".", ".", 1);
+    root->expanded = 1;
+    build_tree(root);
     SDL_Window *window = SDL_CreateWindow(
         "Ekagra Editor",
         SDL_WINDOWPOS_CENTERED,
@@ -883,19 +979,34 @@ int main(int argc,char *argv[]) {
                 }
 
                 // SIDEBAR OPERATION (ALT keys)
-                if(event.key.keysym.mod&KMOD_ALT){
-                    if(event.key.keysym.sym==SDLK_RETURN){
-                        open_file_in_tab(files[selected_file]);
-                        buf = &tabs[active_tab];
-                    }
-                    if(event.key.keysym.sym==SDLK_UP&&selected_file>0){
-                        selected_file--;
-                    }
-                    if(event.key.keysym.sym==SDLK_DOWN&&selected_file<file_count-1){
-                        selected_file++;
-                    }
-                }
+                if (event.key.keysym.mod & KMOD_ALT) {
 
+		    if (event.key.keysym.sym == SDLK_DOWN &&
+			selected_index < visible_count - 1)
+		    {selected_index++;break;}
+
+		    if (event.key.keysym.sym == SDLK_UP &&
+			selected_index > 0){
+			selected_index--;break;}
+		}
+		if ((event.key.keysym.mod & KMOD_ALT) &&
+		    event.key.keysym.sym == SDLK_RETURN) {
+
+		    FileNode *node = visible[selected_index].node;
+
+		    if (node->is_dir) {
+			node->expanded = !node->expanded;
+
+			// lazy load children (IMPORTANT)
+			if (node->expanded && node->child_count == 0) {
+			    build_tree(node);
+			}
+		    }
+		    else {
+			open_file_in_tab(node->path);
+		    }
+		    break;
+		}
                 if (event.key.keysym.sym == SDLK_DOWN) {
                     if (!shift) buf->selection.active = 0;
                     if (buf->cursor_row < buf->line_count - 1) {
@@ -936,7 +1047,8 @@ int main(int argc,char *argv[]) {
         if (buf->cursor_row >= buf->scroll_offset + visible_lines) {
             buf->scroll_offset = buf->cursor_row - visible_lines + 1;
         }
-
+	visible_count=0;
+	build_visible(root,0);
         render_sidebar(renderer, font);
         render_tabs(renderer, font);
 	// highlight matches
