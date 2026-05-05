@@ -43,7 +43,7 @@ typedef struct {
 	int undo_top;
 	EditorState redo_stack[MAX_HISTORY];
 	int redo_top;
-
+	int modified;
 	Selection selection;
 } EditorBuffer;
 
@@ -64,6 +64,10 @@ int search_len=0;
 int last_match_row=-1;
 int last_match_col=-1;
 
+// command mode 
+int command_mode=0;
+char command_buffer[256]="";
+int command_len=0;
 const char *keywords[] = {
     "int", "return", "if", "else", "while", "for", "void", "char", "float", "double"
 };
@@ -160,6 +164,31 @@ void render_tabs(SDL_Renderer *renderer, TTF_Font *font) {
         SDL_DestroyTexture(t);
     }
 }
+void render_status_bar(SDL_Window * window, SDL_Renderer *renderer, TTF_Font *font,EditorBuffer *buf){
+	int window_w,window_h;
+	SDL_GetWindowSize(window,&window_w,&window_h);
+	int bar_height=TTF_FontHeight(font)+5;
+	SDL_Rect bar = {0,window_h-bar_height,window_w,bar_height};
+	SDL_SetRenderDrawColor(renderer,30,30,30,255);
+	SDL_RenderFillRect(renderer,&bar);
+	char status[512];
+	sprintf(status,
+		"%s%s | Ln %d, Col %d | Lines:%d | %s",
+		buf->filename,
+		buf->modified?" *": "",
+		buf->cursor_row+1,
+		buf->cursor_col+1,
+		buf->line_count,
+		search_mode?"SEARCH":"NORMAL"
+	);
+	SDL_Color color = {200,200,200,255};
+	SDL_Surface *s= TTF_RenderText_Blended(font,status,color);
+	SDL_Texture *t=SDL_CreateTextureFromSurface(renderer,s);
+	SDL_Rect dst = {10,window_h-bar_height+3,s->w,s->h};
+	SDL_RenderCopy(renderer,t,NULL,&dst);
+	SDL_FreeSurface(s);
+	SDL_DestroyTexture(t);
+}
 int is_keyword(const char *word){
 	for(int i=0;i<keyword_count;i++){
 		if(strcmp(word,keywords[i])==0)return 1;
@@ -179,13 +208,14 @@ void save_state(EditorBuffer *buf){
 	s->line_count=buf->line_count;
 	s->cursor_row=buf->cursor_row;
 	s->cursor_col=buf->cursor_col;
-
+	buf->modified=0;
 	buf->redo_top=-1;
 }
 
 void delete_selection(EditorBuffer *buf){
 	if(!buf->selection.active)return;
 	save_state(buf);
+	buf->modified=1;
 	normalize_selection(&buf->selection);
 	int sr = buf->selection.start_row;
 	int sc = buf->selection.start_col;
@@ -218,6 +248,7 @@ void delete_selection(EditorBuffer *buf){
 }
 
 void restore_state(EditorBuffer *buf, EditorState *s){
+	buf->modified=1;
 	buf->line_count = s->line_count;
 	buf->cursor_row=s->cursor_row;
 	buf->cursor_col=s->cursor_col;
@@ -330,6 +361,7 @@ void open_file_in_tab(const char *filename) {
 	if (tab_count >= MAX_TABS) return;
 
 	EditorBuffer *buf = &tabs[tab_count];
+	buf->modified=1;
 	memset(buf, 0, sizeof(EditorBuffer));
 
 	strcpy(buf->filename, filename);
@@ -371,6 +403,7 @@ void open_file_in_tab(const char *filename) {
 
 void save_file(EditorBuffer *buf)
 {
+	buf->modified=0;
 	const char *filename = buf->filename;
 	if(strlen(filename)==0) filename="output.txt";
 	FILE *fp=fopen(filename,"w");
@@ -401,7 +434,48 @@ void render_text(SDL_Renderer *renderer, TTF_Font *font, const char *text, int x
     SDL_RenderCopy(renderer, texture, NULL, &dst);
     SDL_DestroyTexture(texture);
 }
+void execute_command(const char *cmd){
+	//new file 
+	if(strncmp(cmd,":new ",5)==0){
+		const char *filename = cmd + 5;
+		FILE *fp = fopen(filename,"w");
+		if(fp){
+			fclose(fp);
+		}
+		load_directory(".");
+	}
+	else if(strncmp(cmd,":del ",5)==0){
+		const char *filename = cmd + 5;
+		remove(filename);
+		load_directory(".");
+	}
+	else if(strncmp(cmd,":ren ",5)==0){
+		char oldname[128],newname[128];
 
+		sscanf(cmd + 4, "%s %s", oldname,newname);
+		rename(oldname,newname);
+		load_directory(".");
+	}
+	else if(strncmp(cmd,":open ",6)==0){
+		open_file_in_tab(cmd+5);
+	}
+
+}
+void render_command_bar(SDL_Renderer *renderer,TTF_Font *font){
+	if(!command_mode)return;
+	SDL_Rect bar={260,0,600,30};
+	SDL_SetRenderDrawColor(renderer,20,20,20,255);
+	SDL_RenderFillRect(renderer,&bar);
+	char display[300];
+	sprintf(display,"%s",command_buffer);
+	SDL_Color color = {255,255,255,255};
+	SDL_Surface *s = TTF_RenderText_Blended(font,display,color);
+	SDL_Texture *t = SDL_CreateTextureFromSurface(renderer,s);
+	SDL_Rect dst = {270,5,s->w,s->h};
+	SDL_RenderCopy(renderer,t,NULL,&dst);
+	SDL_FreeSurface(s);
+	SDL_DestroyTexture(t);
+}
 void find_next(EditorBuffer *buf){
 	if(strlen(search_query)==0)return;
 	int start_row=last_match_row;
@@ -484,9 +558,23 @@ int main(int argc,char *argv[]) {
 
             // ---------- TEXT INPUT ----------
             if (event.type == SDL_TEXTINPUT) {
+		if (command_mode == 0 && strcmp(event.text.text, ":") == 0) {
+			command_mode = 1;
+			command_len = 0;
+			command_buffer[0] = '\0';
+	        }
                 if(buf->selection.active){
                     delete_selection(buf);
                 }
+		
+		if(command_mode){
+			if(command_len<255){
+				strcat(command_buffer,event.text.text);
+				command_len++;
+			}
+			break;
+		}
+	
 		if(search_mode){
 			last_match_row=-1;
 			last_match_col=-1;
@@ -519,10 +607,36 @@ int main(int argc,char *argv[]) {
 
             // ---- KEY EVENTS -----
             if (event.type == SDL_KEYDOWN) {
+		
+		 //quit tab
+		if((event.key.keysym.mod&KMOD_CTRL)&&(event.key.keysym.sym==SDLK_w)){
+ 			if(tab_count<=1)break;
+			for(int i=0;i<MAX_LINES;i++){
+				if(tabs[active_tab].line_textures[i]){
+					SDL_DestroyTexture(tabs[active_tab].line_textures[i]);
+				}
+			}
+		for(int i=active_tab;i<tab_count-1;i++){
+			tabs[i]=tabs[i-1];	
+		}	
+		tab_count--;
+		if(active_tab>=tab_count)active_tab=tab_count-1;
+  	       }
                 int shift = event.key.keysym.mod&KMOD_SHIFT;
+		//escape mode
 		if(search_mode && event.key.keysym.sym==SDLK_ESCAPE){search_mode=0;
 		}
-				//CTRL + F - search
+		if(command_mode && event.key.keysym.sym==SDLK_ESCAPE){
+			command_mode=0;
+		}
+		// command terminal
+//		if(event.key.keysym.sym==SDLK_COLON){
+//			command_mode=1;
+//			command_len=0;
+//			command_buffer[0]='\0';
+//		}
+	
+		//CTRL + F - search
 		if((event.key.keysym.mod & KMOD_CTRL)&&event.key.keysym.sym==SDLK_f){
 		search_mode=1;
 		search_len=0;
@@ -546,6 +660,13 @@ int main(int argc,char *argv[]) {
                 }
 
                 // BACKSPACE
+		if(command_mode && event.key.keysym.sym==SDLK_BACKSPACE){
+			if(command_len>1){
+				command_buffer[--command_len]='\0';
+				break;
+			}
+		
+		}
                 if (event.key.keysym.sym == SDLK_BACKSPACE) {
                     if(buf->selection.active){
                         delete_selection(buf);
@@ -618,6 +739,11 @@ int main(int argc,char *argv[]) {
                 }
 
                 // ENTER
+		if(command_mode && event.key.keysym.sym==SDLK_RETURN){
+			//printf("received input in cmd -> %s",command_buffer);
+			execute_command(command_buffer);
+			command_mode=0;
+		}
                 if (event.key.keysym.sym == SDLK_RETURN) {
 	            if(search_mode){
 			EditorBuffer *buf=&tabs[active_tab];
@@ -799,8 +925,9 @@ int main(int argc,char *argv[]) {
 
         int window_height, window_width;
         SDL_GetWindowSize(window, &window_width, &window_height);
-
-        int visible_lines = (window_height - 50 - editor_y_offset) / line_height;
+	
+	int bar_height=TTF_FontHeight(font)+5;
+        int visible_lines = (window_height - bar_height - 50 - editor_y_offset) / line_height;
 
         // scroll logic
         if (buf->cursor_row < buf->scroll_offset) {
@@ -869,6 +996,7 @@ int main(int argc,char *argv[]) {
 
 	for (int i = 0; i < visible_lines; i++) {
             int line_index = buf->scroll_offset + i;
+	    render_command_bar(renderer,font);  
             if (line_index >= buf->line_count) break;
 
             int y = editor_y_offset + 10 + i * line_height;
@@ -928,7 +1056,7 @@ int main(int argc,char *argv[]) {
                 SDL_RenderCopy(renderer, buf->line_textures[line_index], NULL, &dst);
             }
         }
-
+	render_status_bar(window,renderer,font,&tabs[active_tab]);
         // ---- CURSOR ------
         char temp[MAX_COLS];
         strncpy(temp,buf->lines[buf->cursor_row],buf->cursor_col);
