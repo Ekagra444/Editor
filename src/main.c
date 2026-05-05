@@ -132,11 +132,11 @@ void render_sidebar(SDL_Renderer *renderer, TTF_Font *font){
         }
 
         char display[300];
-
+	const char *name = strrchr(visible[i].node->path,'/')?strrchr(visible[i].node->path,'/')+1:visible[i].node->path;
         if (visible[i].node->is_dir) {
             sprintf(display, "%s %s",
                 visible[i].node->expanded ? "[-]" : "[+]",
-                visible[i].node->name);
+                name);
         } else {
             sprintf(display, "    %s", visible[i].node->name);
         }
@@ -472,6 +472,55 @@ void render_text(SDL_Renderer *renderer, TTF_Font *font, const char *text, int x
     SDL_RenderCopy(renderer, texture, NULL, &dst);
     SDL_DestroyTexture(texture);
 }
+FileNode* create_node(const char *name, const char *path, int is_dir) {
+    FileNode *n = malloc(sizeof(FileNode));
+    strcpy(n->name, name);
+    strcpy(n->path, path);
+    n->is_dir = is_dir;
+    n->child_count = 0;
+    n->expanded = 0;
+    return n;
+}
+void build_tree(FileNode *parent) {
+
+    DIR *dir = opendir(parent->path);
+    if (!dir) return;
+
+    struct dirent *entry;
+
+    while ((entry = readdir(dir))) {
+
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
+
+        char full[512];
+        sprintf(full, "%s/%s", parent->path, entry->d_name);
+
+        struct stat st;
+        if (stat(full, &st) == -1) continue;
+
+        int is_dir = S_ISDIR(st.st_mode);
+
+        FileNode *child = create_node(entry->d_name, full, is_dir);
+
+        parent->children[parent->child_count++] = child;
+    }
+
+    closedir(dir);
+}
+void build_visible(FileNode *node, int depth) {
+
+    visible[visible_count++] = (VisibleNode){node, depth};
+
+    if (node->is_dir && node->expanded) {
+        for (int i = 0; i < node->child_count; i++) {
+            build_visible(node->children[i], depth + 1);
+        }
+    }
+}
+void free_tree(FileNode *node){
+	return;
+}
 void execute_command(const char *cmd){
 	//new file 
 	if(strncmp(cmd,":new ",5)==0){
@@ -562,61 +611,23 @@ void find_next(EditorBuffer *buf){
 	}
 }	
 
-FileNode* create_node(const char *name, const char *path, int is_dir) {
-    FileNode *n = malloc(sizeof(FileNode));
-    strcpy(n->name, name);
-    strcpy(n->path, path);
-    n->is_dir = is_dir;
-    n->child_count = 0;
-    n->expanded = 0;
-    return n;
-}
-void build_tree(FileNode *parent) {
-
-    DIR *dir = opendir(parent->path);
-    if (!dir) return;
-
-    struct dirent *entry;
-
-    while ((entry = readdir(dir))) {
-
-        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
-            continue;
-
-        char full[512];
-        sprintf(full, "%s/%s", parent->path, entry->d_name);
-
-        struct stat st;
-        if (stat(full, &st) == -1) continue;
-
-        int is_dir = S_ISDIR(st.st_mode);
-
-        FileNode *child = create_node(entry->d_name, full, is_dir);
-
-        parent->children[parent->child_count++] = child;
-    }
-
-    closedir(dir);
-}
-void build_visible(FileNode *node, int depth) {
-
-    visible[visible_count++] = (VisibleNode){node, depth};
-
-    if (node->is_dir && node->expanded) {
-        for (int i = 0; i < node->child_count; i++) {
-            build_visible(node->children[i], depth + 1);
-        }
-    }
-}
 // ---- MAIN ------
 int main(int argc,char *argv[]) {
     SDL_Init(SDL_INIT_VIDEO);
     TTF_Init();
-    load_directory(".");
-    root = create_node(".", ".", 1);
-    root->expanded = 1;
-    build_tree(root);
-    SDL_Window *window = SDL_CreateWindow(
+    if(argc>1){
+	    root = create_node(argv[1],argv[1] , 1);
+	    root->expanded = 1;
+	    build_tree(root);
+
+    }
+    else{
+	    root = create_node(".", ".", 1);
+	    root->expanded = 1;
+	    build_tree(root);
+
+    }
+       SDL_Window *window = SDL_CreateWindow(
         "Ekagra Editor",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
@@ -631,12 +642,12 @@ int main(int argc,char *argv[]) {
         return 1;
     }
 
-    if(argc>1){
-        open_file_in_tab(argv[1]);
-    } else {
-        // open a blank buffer
-        open_file_in_tab("untitled");
-    }
+//    if(argc>1){
+//        open_file_in_tab(argv[1]);
+//    } else {
+//        // open a blank buffer
+//        open_file_in_tab("untitled");
+//    }
 
     SDL_StartTextInput();
 
