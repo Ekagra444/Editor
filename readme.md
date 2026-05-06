@@ -1,5 +1,5 @@
 # Ekagra Editor
-
+![Preview of the text editor](./assets/preview.png)
 A lightweight SDL2-based code editor with syntax highlighting, tabs, and an integrated file tree.
 
 ## Building
